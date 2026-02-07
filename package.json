@@ -1,0 +1,42 @@
+{
+  "name": "md2pdf",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "A clean, modern Markdown to PDF converter with live preview",
+  "author": "Igor Dodic",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/igordodic/md2pdf.git"
+  },
+  "homepage": "https://github.com/igordodic/md2pdf#readme",
+  "bugs": {
+    "url": "https://github.com/igordodic/md2pdf/issues"
+  },
+  "keywords": [
+    "markdown",
+    "pdf",
+    "converter",
+    "editor",
+    "preview",
+    "astro",
+    "react"
+  ],
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/react": "^4.4.2",
+    "astro": "^5.17.1",
+    "marked": "^17.0.1",
+    "puppeteer": "^24.37.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
