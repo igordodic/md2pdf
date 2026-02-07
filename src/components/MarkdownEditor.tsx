@@ -78,6 +78,12 @@ function hello() {
 	const folderInputRef = useRef<HTMLInputElement>(null);
 	// Ref for single file picker input
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	// Ref for textarea (used for formatting)
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// Ref for file handle (used for saving back to file)
+	const fileHandleRef = useRef<any>(null);
+	// Track if file was opened via File System Access API
+	const [isSaving, setIsSaving] = useState(false);
 
 	// Ensure webkitdirectory attribute is set on the input element
 	useEffect(() => {
@@ -458,8 +464,180 @@ function hello() {
 		}
 	};
 
-	const openFilePicker = () => {
-		fileInputRef.current?.click();
+	const openFilePicker = async () => {
+		// Check if File System Access API is supported for single file
+		const supportsFSAccess = 'showOpenFilePicker' in window;
+
+		if (supportsFSAccess) {
+			try {
+				// Use File System Access API for single file
+				const [fileHandle] = await (window as any).showOpenFilePicker({
+					types: [{
+						description: 'Markdown files',
+						accept: { 'text/markdown': ['.md', '.markdown', '.mdx', '.mkd', '.mdown'] }
+					}]
+				});
+
+				setIsLoadingFile(true);
+				setError(null);
+
+				const file = await fileHandle.getFile();
+				const content = await readFileContent(file);
+
+				setMarkdown(content);
+				setCurrentFileName(file.name);
+				setCurrentFilePath(null);
+				setFiles([]);
+				setSelectedFile('');
+
+				// Store the file handle for saving back
+				fileHandleRef.current = fileHandle;
+			} catch (err: any) {
+				if (err.name !== 'AbortError') {
+					setError(err.message || 'Failed to open file');
+				}
+			} finally {
+				setIsLoadingFile(false);
+			}
+		} else {
+			// Fallback to traditional input
+			fileInputRef.current?.click();
+		}
+	};
+
+	// Save markdown file function (hybrid approach)
+	const saveMarkdownFile = async () => {
+		setIsSaving(true);
+		setError(null);
+
+		try {
+			// Try File System Access API first (for files opened with showOpenFilePicker)
+			if (fileHandleRef.current) {
+				const writable = await fileHandleRef.current.createWritable();
+				await writable.write(markdown);
+				await writable.close();
+
+				// Show brief success feedback
+				setError('File saved!');
+				setTimeout(() => setError(null), 2000);
+				return;
+			}
+
+			// Fallback: download as .md file
+			const blob = new Blob([markdown], { type: 'text/markdown' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = currentFileName || 'document.md';
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+		} catch (err: any) {
+			// Silently ignore user cancellation (NotAllowedError/AbortError)
+			if (err?.name === 'NotAllowedError' || err?.name === 'AbortError') {
+				return;
+			}
+			setError(err instanceof Error ? err.message : 'Failed to save file');
+		} finally {
+			setIsSaving(false);
+		}
+	};
+
+	// Formatting function for toolbar buttons (preserves undo history)
+	const formatText = (type: string) => {
+		const textarea = textareaRef.current;
+		if (!textarea) return;
+
+		const start = textarea.selectionStart;
+		const end = textarea.selectionEnd;
+		const selectedText = textarea.value.substring(start, end);
+
+		let insertionText = '';
+		let cursorOffset = 0;
+
+		switch (type) {
+			case 'bold':
+				insertionText = selectedText ? `**${selectedText}**` : '**bold**';
+				cursorOffset = selectedText ? start + selectedText.length + 4 : start + 2;
+				break;
+			case 'italic':
+				insertionText = selectedText ? `*${selectedText}*` : '*italic*';
+				cursorOffset = selectedText ? start + selectedText.length + 2 : start + 1;
+				break;
+			case 'strikethrough':
+				insertionText = selectedText ? `~~${selectedText}~~` : '~~strikethrough~~';
+				cursorOffset = selectedText ? start + selectedText.length + 4 : start + 2;
+				break;
+			case 'code':
+				insertionText = selectedText ? `\`${selectedText}\`` : '`code`';
+				cursorOffset = selectedText ? start + selectedText.length + 2 : start + 1;
+				break;
+			case 'codeBlock':
+				insertionText = selectedText ? `\`\`\`\n${selectedText}\n\`\`\`` : '```\n\n```';
+				cursorOffset = selectedText ? start + 5 : start + 4;
+				break;
+			case 'heading':
+				insertionText = selectedText ? `## ${selectedText}` : '## ';
+				cursorOffset = start + 3;
+				break;
+			case 'link':
+				insertionText = selectedText ? `[${selectedText}](url)` : '[link](url)';
+				cursorOffset = selectedText ? start + selectedText.length + 4 : start + 1;
+				break;
+			case 'list':
+				if (selectedText) {
+					// Handle multi-line selection for lists
+					const lines = selectedText.split('\n');
+					insertionText = lines.map(line => `- ${line}`).join('\n');
+					cursorOffset = start + insertionText.length;
+				} else {
+					insertionText = '- ';
+					cursorOffset = start + 2;
+				}
+				break;
+			case 'blockquote':
+				if (selectedText) {
+					// Handle multi-line selection for blockquotes
+					const lines = selectedText.split('\n');
+					insertionText = lines.map(line => `> ${line}`).join('\n');
+					cursorOffset = start + insertionText.length;
+				} else {
+					insertionText = '> ';
+					cursorOffset = start + 2;
+				}
+				break;
+			case 'hr':
+				insertionText = '\n---\n';
+				cursorOffset = start + 5;
+				break;
+			default:
+				return;
+		}
+
+		// Use setRangeText which preserves undo history
+		textarea.focus();
+		textarea.setRangeText(insertionText, start, end, 'end');
+
+		// Restore cursor position
+		if (type === 'heading' && !selectedText) {
+			// For heading with no selection, place cursor after ##
+			textarea.setSelectionRange(cursorOffset, cursorOffset);
+		} else if (type === 'link' && !selectedText) {
+			// For link with no selection, place cursor after [
+			textarea.setSelectionRange(cursorOffset, cursorOffset);
+		} else if (type === 'codeBlock' && !selectedText) {
+			// For code block with no selection, place cursor in the middle
+			const middleStart = start + 4;
+			const middleEnd = start + 4;
+			textarea.setSelectionRange(middleStart, middleEnd);
+		} else {
+			textarea.setSelectionRange(cursorOffset, cursorOffset);
+		}
+
+		// Dispatch input event to sync React state
+		const event = new Event('input', { bubbles: true });
+		textarea.dispatchEvent(event);
 	};
 
 	// Handle single file selection
@@ -478,6 +656,8 @@ function hello() {
 			// Clear the files list since we opened a single file
 			setFiles([]);
 			setSelectedFile('');
+			// Clear file handle since we used fallback input (can't save back)
+			fileHandleRef.current = null;
 		} catch (err) {
 			setError(err instanceof Error ? err.message : 'Failed to read file');
 		} finally {
@@ -609,10 +789,106 @@ function hello() {
 			<main className={`editor-container ${showPreview ? 'split-view' : 'editor-only'}`}>
 				<div className="editor-panel">
 					<div className="editor-header">
-						<span>{currentFileName || 'Untitled'}</span>
+						<span className="file-name">{currentFileName || 'Untitled'}</span>
+						<div className="formatting-toolbar">
+							<button
+								className="format-btn"
+								onClick={() => formatText('bold')}
+								type="button"
+								title="Bold (Ctrl+B)"
+							>
+								<strong>B</strong>
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('italic')}
+								type="button"
+								title="Italic (Ctrl+I)"
+							>
+								<em>i</em>
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('strikethrough')}
+								type="button"
+								title="Strikethrough"
+							>
+								<del>S</del>
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('code')}
+								type="button"
+								title="Inline Code"
+							>
+								&lt;/&gt;
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('codeBlock')}
+								type="button"
+								title="Code Block"
+							>
+								{'{}'}
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('heading')}
+								type="button"
+								title="Heading"
+							>
+								H
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('link')}
+								type="button"
+								title="Link"
+							>
+								<span className="icon-link"></span>
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('list')}
+								type="button"
+								title="Bullet List"
+							>
+								&#8226;
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('blockquote')}
+								type="button"
+								title="Blockquote"
+							>
+								&#8220;
+							</button>
+							<button
+								className="format-btn"
+								onClick={() => formatText('hr')}
+								type="button"
+								title="Horizontal Rule"
+							>
+								&#8212;
+							</button>
+							<div className="toolbar-divider"></div>
+							<button
+								className="format-btn format-btn-save"
+								onClick={saveMarkdownFile}
+								disabled={isSaving || !markdown}
+								type="button"
+								title="Save markdown file"
+							>
+								<svg width="14" height="14" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+									<path d="M4 6C4 4.89543 4.89543 4 6 4H14C15.1046 4 16 4.89543 16 6V14C16 15.1046 15.1046 16 14 16H6C4.89543 16 4 15.1046 4 14V6Z" stroke="currentColor" strokeWidth="1.5"/>
+									<path d="M16 8H16.5C17.3284 8 18 8.67157 18 9.5V14.5C18 15.3284 17.3284 16 16.5 16H16" stroke="currentColor" strokeWidth="1.5"/>
+								</svg>
+							</button>
+						</div>
 						<span className="char-count">{markdown.length} chars</span>
 					</div>
 					<textarea
+						ref={textareaRef}
 						value={markdown}
 						onChange={(e) => setMarkdown(e.target.value)}
 						placeholder="Enter your Markdown here..."
