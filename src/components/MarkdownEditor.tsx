@@ -80,8 +80,12 @@ function hello() {
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	// Ref for textarea (used for formatting)
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// Ref for preview content (used for scroll sync)
+	const previewRef = useRef<HTMLDivElement>(null);
 	// Ref for file handle (used for saving back to file)
 	const fileHandleRef = useRef<any>(null);
+	// Flag to prevent infinite scroll sync loop
+	const isScrollSyncing = useRef(false);
 	// Track if file was opened via File System Access API
 	const [isSaving, setIsSaving] = useState(false);
 
@@ -93,6 +97,53 @@ function hello() {
 			input.setAttribute('directory', '');
 		}
 	}, []);
+
+	// Synchronized scrolling between editor and preview
+	useEffect(() => {
+		const textarea = textareaRef.current;
+		const preview = previewRef.current;
+
+		if (!textarea || !preview || !showPreview) return;
+
+		const syncScroll = (source: HTMLElement, target: HTMLElement) => {
+			if (isScrollSyncing.current) return;
+			isScrollSyncing.current = true;
+
+			// Calculate scroll percentage
+			const sourceMaxScroll = source.scrollHeight - source.clientHeight;
+			const targetMaxScroll = target.scrollHeight - target.clientHeight;
+
+			if (sourceMaxScroll > 0 && targetMaxScroll > 0) {
+				const scrollPercentage = source.scrollTop / sourceMaxScroll;
+				target.scrollTop = scrollPercentage * targetMaxScroll;
+			}
+
+			// Reset flag after a short delay to allow the scroll event to complete
+			requestAnimationFrame(() => {
+				isScrollSyncing.current = false;
+			});
+		};
+
+		const handleEditorScroll = () => {
+			if (textarea && preview) {
+				syncScroll(textarea, preview);
+			}
+		};
+
+		const handlePreviewScroll = () => {
+			if (textarea && preview) {
+				syncScroll(preview, textarea);
+			}
+		};
+
+		textarea.addEventListener('scroll', handleEditorScroll);
+		preview.addEventListener('scroll', handlePreviewScroll);
+
+		return () => {
+			textarea.removeEventListener('scroll', handleEditorScroll);
+			preview.removeEventListener('scroll', handlePreviewScroll);
+		};
+	}, [showPreview]);
 
 	const htmlContent = marked(markdown);
 
@@ -900,6 +951,7 @@ function hello() {
 					<div className="preview-panel">
 						<div className="preview-header">Preview</div>
 						<div
+							ref={previewRef}
 							className="preview-content"
 							dangerouslySetInnerHTML={{ __html: htmlContent }}
 						/>
